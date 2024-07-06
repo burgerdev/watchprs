@@ -7,12 +7,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"time"
 
-	goteamsnotify "github.com/atc0005/go-teams-notify/v2"
-	"github.com/atc0005/go-teams-notify/v2/messagecard"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
+	"github.com/burgerdev/watchprs/pkg/handler"
+	"github.com/burgerdev/watchprs/pkg/watcher"
 	"github.com/google/go-github/v62/github"
 )
 
@@ -22,119 +23,101 @@ const (
 )
 
 var (
-	owner   = flag.String("owner", "", "Github repository owner")
-	repo    = flag.String("repo", "", "Github repository")
-	base    = flag.String("base", "main", "PR target branch")
-	filesRE = flag.String("files-re", ".*", "regular expression for files of interest")
+	owner  = flag.String("owner", "", "Github repository owner")
+	repo   = flag.String("repo", "", "Github repository")
+	base   = flag.String("base-re", ".*", "regular expression for the PR's target branch")
+	files  = flag.String("files-re", ".*", "regular expression for files of interest")
+	period = flag.Duration("period", time.Minute, "time between GitHub API calls")
+	debug  = flag.Bool("debug", false, "print debug information")
 )
 
-type Config struct {
-	Token    string
-	TeamsURL string
-	Repo     string
-	Owner    string
-	Base     string
-	RE       *regexp.Regexp
+type config struct {
+	gh       *github.Client
+	matcher  watcher.Matcher
+	handlers []watcher.Handler
 }
 
-func initialize() *Config {
+func initialize() *config {
 	flag.Parse()
-	token := os.Getenv(tokenEnvVar)
-	if token == "" {
-		log.Fatalf("Environment variable %q must be set!", tokenEnvVar)
-	}
-	teamsURL := os.Getenv(teamsURLEnvVar)
-	if token == "" {
-		log.Fatalf("Environment variable %q must be set!", teamsURLEnvVar)
-	}
 
 	if *owner == "" || *repo == "" {
 		log.Fatalf("--owner and --repo must be set")
 	}
-	re, err := regexp.Compile(*filesRE)
+
+	token := os.Getenv(tokenEnvVar)
+	if token == "" {
+		log.Fatalf("Environment variable %q must be set!", tokenEnvVar)
+	}
+	filesRE, err := regexp.Compile(*files)
 	if err != nil {
-		log.Fatalf("Could not compile --files-re=%q: %v", *filesRE, err)
+		log.Fatalf("Could not compile --files-re=%q: %v", *files, err)
+	}
+	baseRE, err := regexp.Compile(*base)
+	if err != nil {
+		log.Fatalf("Could not compile --base-re=%q: %v", *base, err)
+	}
+	matcher := watcher.MatcherFunc(func(_ context.Context, pr *github.PullRequest) bool {
+		return matchPR(pr, baseRE, filesRE)
+	})
+
+	handlers := []watcher.Handler{}
+
+	teamsURL := os.Getenv(teamsURLEnvVar)
+	if teamsURL != "" {
+		log.Println("Setting up Microsoft Teams integration")
+		handlers = append(handlers, &handler.Teams{URL: teamsURL, Prefix: fmt.Sprintf("%s/%s: ", *owner, *repo)})
 	}
 
-	return &Config{
-		Token:    token,
-		TeamsURL: teamsURL,
-		Repo:     *repo,
-		Owner:    *owner,
-		Base:     *base,
-		RE:       re,
+	if *debug {
+		handlers = append(handlers, watcher.HandlerFunc(func(ctx context.Context, pr *github.PullRequest) {
+			url := "<no URL in PR>"
+			if pr.HTMLURL != nil {
+				url = *pr.HTMLURL
+			}
+			title := "<no title>"
+			if pr.Title != nil {
+				title = *pr.Title
+			}
+			log.Printf("Handling PR %s: %q", url, title)
+		}))
+	}
+
+	return &config{
+		gh:       github.NewClient(nil).WithAuthToken(token),
+		matcher:  matcher,
+		handlers: handlers,
 	}
 }
 
 func main() {
 	cfg := initialize()
-	gh := github.NewClient(nil).WithAuthToken(cfg.Token)
+	ctx, cancel := context.WithCancel(context.Background())
 
-	// Populate cache
-	prs := make(map[int]*github.PullRequest)
-	for _, pr := range fetchPRs(gh, cfg) {
-		prs[*pr.Number] = pr
-	}
+	t := time.NewTicker(*period)
 
-	iter := func() {
-		for _, pr := range fetchPRs(gh, cfg) {
-			if _, ok := prs[*pr.Number]; ok {
-				continue
+	w := watcher.New(cfg.gh.PullRequests, *owner, *repo)
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+
+	go func() {
+		if err := w.Run(ctx, t.C, cfg.matcher, cfg.handlers); err != nil {
+			if err != context.Canceled {
+				log.Fatal(err)
 			}
-			handleNewPR(pr, cfg)
-			prs[*pr.Number] = pr
+			sigs <- os.Interrupt
 		}
-	}
+	}()
 
-	iter()
-	tic := time.NewTicker(300 * time.Second)
-	for range tic.C {
-		iter()
-	}
+	<-sigs
+	cancel()
 }
 
-func handleNewPR(pr *github.PullRequest, cfg *Config) {
-	log.Printf("===== NEW PR: %s =====", *pr.URL)
-
-	// Initialize a new Microsoft Teams client.
-	mstClient := goteamsnotify.NewTeamsClient()
-
-	// Setup message card.
-	msgCard := messagecard.NewMessageCard()
-	msgCard.Title = fmt.Sprintf("%s/%s: %s", cfg.Owner, cfg.Repo, *pr.Title)
-	msgCard.Text = *pr.HTMLURL
-	// msgCard.ThemeColor = "#DF813D"
-
-	// Send the message with default timeout/retry settings.
-	if err := mstClient.Send(cfg.TeamsURL, msgCard); err != nil {
-		log.Printf("failed to send message to teams: %v", err)
-	}
-}
-
-func fetchPRs(gh *github.Client, cfg *Config) []*github.PullRequest {
-	prs, resp, err := gh.PullRequests.List(context.Background(), *owner, *repo, &github.PullRequestListOptions{
-		Base: *base,
-		ListOptions: github.ListOptions{
-			PerPage: 25,
-		},
-	})
-	if err != nil {
-		log.Printf("Listing pull requests failed: %v (%v)", err, resp)
-	}
-	log.Printf("Github response: %v", resp)
-
-	var out []*github.PullRequest
-	for _, pr := range prs {
-		if !matchesFiles(pr, cfg.RE) {
-			continue
-		}
-		out = append(out, pr)
-	}
-	return out
-}
-
-func matchesFiles(pr *github.PullRequest, re *regexp.Regexp) bool {
+func matchPR(pr *github.PullRequest, branchRE, filesRE *regexp.Regexp) bool {
 	if pr.DiffURL == nil {
+		return false
+	}
+	if pr.Base == nil || !branchRE.MatchString(pr.Base.GetLabel()) {
 		return false
 	}
 	diffs, err := fetchDiff(*pr.DiffURL)
@@ -143,10 +126,10 @@ func matchesFiles(pr *github.PullRequest, re *regexp.Regexp) bool {
 		return false
 	}
 	for _, diff := range diffs {
-		if re.MatchString(diff.NewName) {
+		if filesRE.MatchString(diff.NewName) {
 			return true
 		}
-		if re.MatchString(diff.OldName) {
+		if filesRE.MatchString(diff.OldName) {
 			return true
 		}
 	}

@@ -13,3 +13,5 @@ Usage (remember not to pass secrets on the commandline!):
 ```sh
 env GH_TOKEN=$token TEAMS_WEBHOOK=$hook watchprs --owner burgerdev --repo watchprs --base-re "^(main|master)$" --files-re "^pkg/.*$"
 ```
+
+The program is published as container image at `ghcr.io/burgerdev/watchprs:latest`.

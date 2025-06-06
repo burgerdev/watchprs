@@ -17,14 +17,20 @@ type T struct {
 }
 
 func New(prs PullRequestsService, owner, repo string) *T {
-	return &T{prs: prs, owner: owner, repo: repo}
+	return &T{prs: prs, owner: owner, repo: repo, acme: -1}
+}
+
+func NewWithAcme(prs PullRequestsService, owner, repo string, acme int) *T {
+	return &T{prs: prs, owner: owner, repo: repo, acme: acme}
 }
 
 func (t *T) Run(ctx context.Context, ticker <-chan time.Time, matcher Matcher, handlers []Handler) error {
-	// Fetch once to set the high watermark.
-	_, err := t.fetchPRs(ctx, MatcherFunc(func(ctx context.Context, pr *github.PullRequest) bool { return true }))
-	if err != nil {
-		return err
+	if t.acme < 0 {
+		// Fetch once to set the high watermark.
+		_, err := t.fetchPRs(ctx, MatcherFunc(func(ctx context.Context, pr *github.PullRequest) bool { return true }))
+		if err != nil {
+			return err
+		}
 	}
 
 	for {

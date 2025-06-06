@@ -26,6 +26,7 @@ var (
 	owner  = flag.String("owner", "", "Github repository owner")
 	repo   = flag.String("repo", "", "Github repository")
 	base   = flag.String("base-re", ".*", "regular expression for the PR's target branch")
+	acme   = flag.Int("pr", -1, "notify after a specific PR number (default: notify for PRs created after start)")
 	files  = flag.String("files-re", ".*", "regular expression for files of interest")
 	period = flag.Duration("period", time.Minute, "time between GitHub API calls")
 	debug  = flag.Bool("debug", false, "print debug information")
@@ -95,7 +96,7 @@ func main() {
 
 	t := time.NewTicker(*period)
 
-	w := watcher.New(cfg.gh.PullRequests, *owner, *repo)
+	w := watcher.NewWithAcme(cfg.gh.PullRequests, *owner, *repo, *acme)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt)

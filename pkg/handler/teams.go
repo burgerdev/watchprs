@@ -2,10 +2,11 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	goteamsnotify "github.com/atc0005/go-teams-notify/v2"
-	"github.com/atc0005/go-teams-notify/v2/messagecard"
+	"github.com/atc0005/go-teams-notify/v2/adaptivecard"
 	"github.com/google/go-github/v62/github"
 )
 
@@ -22,21 +23,23 @@ func (t *Teams) HandlePR(ctx context.Context, pr *github.PullRequest) {
 	if mstClient == nil {
 		mstClient = goteamsnotify.NewTeamsClient()
 	}
-
-	// Setup message card.
-	msgCard := messagecard.NewMessageCard()
 	title := "_untitled PR_"
 	if pr.Title != nil {
 		title = *pr.Title
 	}
-	msgCard.Title = t.Prefix + title
-	msgCard.Text = "no URL available"
+	text := "no URL available"
 	if pr.HTMLURL != nil {
-		msgCard.Text = *pr.HTMLURL
+		text = fmt.Sprintf("[%s](%s)", title, *pr.HTMLURL)
+	}
+
+	msg, err := adaptivecard.NewSimpleMessage(text, t.Prefix+title, false)
+	if err != nil {
+		log.Printf("Failed to create simple message: %v", err)
+		return
 	}
 
 	// Send the message with default timeout/retry settings.
-	if err := mstClient.SendWithContext(ctx, t.URL, msgCard); err != nil {
+	if err := mstClient.SendWithContext(ctx, t.URL, msg); err != nil {
 		log.Printf("Failed to send message to teams: %v", err)
 	}
 }

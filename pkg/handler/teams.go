@@ -21,7 +21,9 @@ func (t *Teams) HandlePR(ctx context.Context, pr *github.PullRequest) {
 
 	mstClient := t.client
 	if mstClient == nil {
-		mstClient = goteamsnotify.NewTeamsClient()
+		// Workaround for https://github.com/atc0005/go-teams-notify/issues/310.
+		validPattern := `^https:\/\/(?:.*)(:?\.azure-api|logic\.azure|api\.powerplatform)\.(?:com|net)`
+		mstClient = goteamsnotify.NewTeamsClient().AddWebhookURLValidationPatterns(validPattern)
 	}
 	title := "_untitled PR_"
 	if pr.Title != nil {

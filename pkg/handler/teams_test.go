@@ -9,13 +9,13 @@ import (
 	"testing"
 
 	goteamsnotify "github.com/atc0005/go-teams-notify/v2"
-	"github.com/atc0005/go-teams-notify/v2/messagecard"
+	"github.com/atc0005/go-teams-notify/v2/adaptivecard"
 	"github.com/google/go-github/v62/github"
 )
 
 type teamsReceiver struct {
 	Called bool
-	Card   messagecard.MessageCard
+	Card   adaptivecard.Message
 	Err    error
 }
 
@@ -30,7 +30,7 @@ func (t *teamsReceiver) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 func (t *teamsReceiver) Reset() {
 	t.Called = false
-	t.Card = messagecard.MessageCard{}
+	t.Card = adaptivecard.Message{}
 	t.Err = nil
 }
 
@@ -63,13 +63,14 @@ func TestTeams(t *testing.T) {
 			t.Fatalf("receiving webhook: %v", receiver.Err)
 		}
 
+		messages := receiver.Card.Attachments[0].Content.Body
 		wantTitle := prefix + *pr.Title
-		if receiver.Card.Title != wantTitle {
-			t.Errorf("wrong title: got %q, want %q", receiver.Card.Title, wantTitle)
+		if messages[0].Text != wantTitle {
+			t.Errorf("wrong title: got %q, want %q", messages[0].Text, wantTitle)
 		}
 
-		if !strings.Contains(receiver.Card.Text, *pr.HTMLURL) {
-			t.Errorf("missing URL: expected %q in %q", *pr.HTMLURL, receiver.Card.Text)
+		if !strings.Contains(messages[1].Text, *pr.HTMLURL) {
+			t.Errorf("missing URL: expected %q in %q", *pr.HTMLURL, messages[1].Text)
 		}
 	})
 }
